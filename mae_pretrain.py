@@ -2,6 +2,7 @@ import os
 import argparse
 import math
 import torch
+import time
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms import ToTensor, Compose, Normalize
@@ -22,14 +23,16 @@ if __name__ == '__main__':
     parser.add_argument('--mask_ratio', type=float, default=0.75)
     parser.add_argument('--total_epoch', type=int, default=1000)
     parser.add_argument('--warmup_epoch', type=int, default=100)
-    parser.add_argument('--data_list_path', type=str, default='/home/ljs/PRD-RSMAE/PRD-RSMAE/data/PRD289K/list')
-    parser.add_argument('--pretrained_model_path', type=str, default='vit-b-mae-dict.pth')
-    parser.add_argument('--save_model_path', type=str, default='vit-b-mae.pt')
+    parser.add_argument('--data_list_path', type=str, default='data/PRD289K/list')
+    parser.add_argument('--pretrained_model_path', type=str, default='logs/PRD289K/vit-b-mae-dict.pth')
+    parser.add_argument('--save_model_path', type=str, default='logs/PRD289K/vit-b-mae.pt')
 
     args = parser.parse_args()
-
     setup_seed(args.seed)
 
+    time_now = time.localtime()
+    logs_folder = os.path.join("logs/PRD289K", time.strftime("%Y-%m-%d-%H-%M-%S", time_now))
+    os.makedirs(logs_folder)
     input_shape = [args.input_shape, args.input_shape]
     batch_size = args.batch_size
     load_batch_size = min(args.max_device_batch_size, batch_size)
@@ -46,7 +49,7 @@ if __name__ == '__main__':
     val_dataset = MyDataset(val_lines, input_shape, image_transform=image_transform)
 
     dataloader = torch.utils.data.DataLoader(train_dataset, load_batch_size, shuffle=True, num_workers=4)
-    writer = SummaryWriter(os.path.join('logs', 'PRD289K', 'mae-pretrain'))
+    writer = SummaryWriter(os.path.join(logs_folder, 'SummaryWriter'))
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     model = MAE_ViT(mask_ratio=args.mask_ratio).to(device)
