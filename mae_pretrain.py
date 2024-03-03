@@ -6,39 +6,56 @@ import torchvision
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms import ToTensor, Compose, Normalize
 from tqdm import tqdm
-
+from dataloader import *
 from model import *
 from utils import setup_seed
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--batch_size', type=int, default=4096)
-    parser.add_argument('--max_device_batch_size', type=int, default=512)
+    parser.add_argument('--pretrained', type=bool, default=False)
+    parser.add_argument('--input_shape', type=int, default=512)
+    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--max_device_batch_size', type=int, default=64)
     parser.add_argument('--base_learning_rate', type=float, default=1.5e-4)
     parser.add_argument('--weight_decay', type=float, default=0.05)
     parser.add_argument('--mask_ratio', type=float, default=0.75)
-    parser.add_argument('--total_epoch', type=int, default=2000)
-    parser.add_argument('--warmup_epoch', type=int, default=200)
-    parser.add_argument('--model_path', type=str, default='vit-t-mae.pt')
+    parser.add_argument('--total_epoch', type=int, default=1000)
+    parser.add_argument('--warmup_epoch', type=int, default=100)
+    parser.add_argument('--data_list_path', type=str, default='/home/ljs/PRD-RSMAE/PRD-RSMAE/data/PRD289K/list')
+    parser.add_argument('--pretrained_model_path', type=str, default='vit-b-mae-dict.pth')
+    parser.add_argument('--save_model_path', type=str, default='vit-b-mae.pt')
 
     args = parser.parse_args()
 
     setup_seed(args.seed)
 
+    input_shape = [args.input_shape, args.input_shape]
     batch_size = args.batch_size
     load_batch_size = min(args.max_device_batch_size, batch_size)
 
     assert batch_size % load_batch_size == 0
     steps_per_update = batch_size // load_batch_size
 
-    train_dataset = torchvision.datasets.CIFAR10('data', train=True, download=True, transform=Compose([ToTensor(), Normalize(0.5, 0.5)]))
-    val_dataset = torchvision.datasets.CIFAR10('data', train=False, download=True, transform=Compose([ToTensor(), Normalize(0.5, 0.5)]))
+    with open(os.path.join(args.data_list_path, "train.txt")) as f:
+        train_lines = f.readlines()
+    with open(os.path.join(args.data_list_path, "val.txt")) as f:
+        val_lines = f.readlines()
+    image_transform = get_transform(input_shape, IsResize=False, IsTotensor=True, IsNormalize=True)
+    train_dataset = MyDataset(train_lines, input_shape, image_transform=image_transform)
+    val_dataset = MyDataset(val_lines, input_shape, image_transform=image_transform)
+
     dataloader = torch.utils.data.DataLoader(train_dataset, load_batch_size, shuffle=True, num_workers=4)
-    writer = SummaryWriter(os.path.join('logs', 'cifar10', 'mae-pretrain'))
+    writer = SummaryWriter(os.path.join('logs', 'PRD289K', 'mae-pretrain'))
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     model = MAE_ViT(mask_ratio=args.mask_ratio).to(device)
+    model = torch.nn.DataParallel(model)
+
+    if args.pretrained and args.pretrained_model_path != '':
+        print('Load weights {}.'.format(args.pretrained_model_path))
+        model.load_state_dict(torch.load(args.pretrained_model_path))  
+    
     optim = torch.optim.AdamW(model.parameters(), lr=args.base_learning_rate * args.batch_size / 256, betas=(0.9, 0.95), weight_decay=args.weight_decay)
     lr_func = lambda epoch: min((epoch + 1) / (args.warmup_epoch + 1e-8), 0.5 * (math.cos(epoch / args.total_epoch * math.pi) + 1))
     lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda=lr_func, verbose=True)
@@ -48,7 +65,7 @@ if __name__ == '__main__':
     for e in range(args.total_epoch):
         model.train()
         losses = []
-        for img, label in tqdm(iter(dataloader)):
+        for img in tqdm(iter(dataloader)):
             step_count += 1
             img = img.to(device)
             predicted_img, mask = model(img)
@@ -66,7 +83,7 @@ if __name__ == '__main__':
         ''' visualize the first 16 predicted images on val dataset'''
         model.eval()
         with torch.no_grad():
-            val_img = torch.stack([val_dataset[i][0] for i in range(16)])
+            val_img = torch.stack([val_dataset[i] for i in range(16)])
             val_img = val_img.to(device)
             predicted_val_img, mask = model(val_img)
             predicted_val_img = predicted_val_img * mask + val_img * (1 - mask)
@@ -75,4 +92,8 @@ if __name__ == '__main__':
             writer.add_image('mae_image', (img + 1) / 2, global_step=e)
         
         ''' save model '''
-        torch.save(model, args.model_path)
+        torch.save(model, args.save_model_path)
+        torch.save(model.state_dict(), args.save_model_path.split(".")[0]+"-dict.pth")
+
+# tensorboard --logdir=/home/ljs/PRD-RSMAE/PRD-RSMAE/logs/PRD289K/mae-pretrain --port=6060
+# ssh -NfL 8080:127.0.0.1:6060 ljs@172.18.206.54 -p 6522
