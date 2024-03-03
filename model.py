@@ -37,11 +37,11 @@ class PatchShuffle(torch.nn.Module):
 
 class MAE_Encoder(torch.nn.Module):
     def __init__(self,
-                 image_size=32,
-                 patch_size=2,
-                 emb_dim=192,
-                 num_layer=12,
-                 num_head=3,
+                 image_size=512, # H(W)
+                 patch_size=32, # H(W)/16
+                 emb_dim=768, # 192 768 1024 1280
+                 num_layer=12, # 12 12 24 32
+                 num_head=12, #3 12 16 16
                  mask_ratio=0.75,
                  ) -> None:
         super().__init__()
@@ -78,11 +78,11 @@ class MAE_Encoder(torch.nn.Module):
 
 class MAE_Decoder(torch.nn.Module):
     def __init__(self,
-                 image_size=32,
-                 patch_size=2,
-                 emb_dim=192,
-                 num_layer=4,
-                 num_head=3,
+                 image_size=512, # H(W)
+                 patch_size=32, # H(W)/16
+                 emb_dim=512, # 192 512 512 512
+                 num_layer=8, # 4 8 8 8
+                 num_head=16, # 3 16 16 16
                  ) -> None:
         super().__init__()
 
@@ -120,16 +120,16 @@ class MAE_Decoder(torch.nn.Module):
         mask = self.patch2img(mask)
 
         return img, mask
-
+    
 class MAE_ViT(torch.nn.Module):
     def __init__(self,
-                 image_size=32,
-                 patch_size=2,
-                 emb_dim=192,
-                 encoder_layer=12,
-                 encoder_head=3,
-                 decoder_layer=4,
-                 decoder_head=3,
+                 image_size=512, # H(W)
+                 patch_size=32, # H(W)/16
+                 emb_dim=768, # 192 768 1024 1280
+                 encoder_layer=12, # 12 12 24 32
+                 encoder_head=12, # 3 12 16 16
+                 decoder_layer=8, # 4 8 8 8
+                 decoder_head=16, # 3 16 16 16
                  mask_ratio=0.75,
                  ) -> None:
         super().__init__()
@@ -179,3 +179,27 @@ if __name__ == '__main__':
     print(predicted_img.shape)
     loss = torch.mean((predicted_img - img) ** 2 * mask / 0.75)
     print(loss)
+
+# def mae_vit_base_patch16_dec512d8b(**kwargs):
+#     model = MaskedAutoencoderViT(
+#         patch_size=16, embed_dim=768, depth=12, num_heads=12,
+#         decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
+#         mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+#     return model
+
+
+# def mae_vit_large_patch16_dec512d8b(**kwargs):
+#     model = MaskedAutoencoderViT(
+#         patch_size=16, embed_dim=1024, depth=24, num_heads=16,
+#         decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
+#         mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+#     return model
+
+
+# def mae_vit_huge_patch14_dec512d8b(**kwargs):
+#     model = MaskedAutoencoderViT(
+#         patch_size=14, embed_dim=1280, depth=32, num_heads=16,
+#         decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
+#         mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+#     return model
+    
