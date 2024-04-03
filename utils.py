@@ -1,7 +1,91 @@
 import random
 import torch
+import os
 import numpy as np
 import torchvision.transforms as transforms
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.cuda.amp import GradScaler
+import matplotlib.pyplot as plt
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
+from osgeo import gdal
+
+# 读取tif
+def read_tif(path):
+    dataset = gdal.Open(path)
+    cols = dataset.RasterXSize # 图像长度
+    rows = dataset.RasterYSize # 图像宽度
+    im_proj = (dataset.GetProjection()) # 读取投影
+    im_Geotrans = (dataset.GetGeoTransform()) # 读取仿射变换
+    im_data = dataset.ReadAsArray(0, 0, cols, rows) # 转为numpy格式
+    if len(im_data.shape)<3:
+        im_data = np.expand_dims(im_data, 0)
+    im_data = np.transpose(im_data, [2, 1, 0])
+    del dataset
+    return im_data, im_Geotrans, im_proj, cols, rows
+
+# 写出tif
+def write_tif(newpath, im_data, im_geotrans, im_proj, datatype):
+    # datatype常用gdal.GDT_UInt16 gdal.GDT_Int16 gdal.GDT_Float32
+    if len(im_data.shape)==3:
+        im_bands, im_height, im_width = im_data.shape
+    else:
+        im_bands, (im_height, im_width) = 1, im_data.shape
+    driver = gdal.GetDriverByName('GTiff')
+    new_dataset = driver.Create(newpath, im_width, im_height, im_bands, datatype)
+    new_dataset.SetGeoTransform(im_geotrans)
+    new_dataset.SetProjection(im_proj)
+
+    if im_bands == 1:
+        new_dataset.GetRasterBand(1).WriteArray(im_data.reshape(im_height, im_width))
+    else:
+        for i in range(im_bands):
+            new_dataset.GetRasterBand(i+1).WriteArray(im_data[i])
+    del new_dataset
+
+def compute_mIoU(CM):
+    np.seterr(divide="ignore", invalid="ignore")
+    intersection = np.diag(CM)
+    ground_truth_set = CM.sum(axis=1)
+    predicted_set = CM.sum(axis=0)
+    union = ground_truth_set + predicted_set - intersection
+    IoU = intersection / union.astype(np.float32)
+    mIoU = np.mean(IoU)
+    return mIoU
+
+def compute_acc(CM):
+    np.seterr(divide="ignore", invalid="ignore")
+    TP = np.sum(np.diag(CM))
+    Sum = np.sum(CM)
+    acc = TP/Sum
+    return acc
+
+def init_ddp(local_rank):
+    '''
+    有了这一句之后,在转换device的时候直接使用 a=a.cuda()即可,否则要用a=a.cuda(local_rank)
+    '''
+    torch.cuda.set_device(local_rank)
+    os.environ['RANK'] = str(local_rank)
+    dist.init_process_group(backend='nccl', init_method='env://')
+
+def reduce_tensor(tensor: torch.Tensor):
+    '''
+    对多个进程计算的多个 tensor 类型的 输出值取平均操作
+    '''
+    rt = tensor.clone()  # tensor(9.1429, device='cuda:1')
+    dist.all_reduce(rt, op=dist.reduce_op.SUM)
+    rt /= dist.get_world_size()
+    return rt
+
+def get_ddp_generator(seed=3407):
+    '''
+    对每个进程使用不同的随机种子，增强训练的随机性
+    '''
+    local_rank = dist.get_rank()
+    g = torch.Generator()
+    g.manual_seed(seed + local_rank)
+    return g
 
 def setup_seed(seed=42):
     torch.manual_seed(seed)
@@ -81,3 +165,103 @@ def get_transform(size=[512, 512], mean=[0, 0, 0], std=[1, 1, 1], IsResize=False
       degrees=10,#每个图像被旋转角度的范围 如degrees=10 则图像将随机旋转一个(-10,10)之间的角度
   )
   return diy_transform
+
+#-------------------------------------------------------------------------------
+class AverageMeter(object):
+
+  def __init__(self):
+    self.reset()
+
+  def reset(self):
+    self.average = 0 
+    self.sum = 0
+    self.count = 0
+
+  def update(self, val, n=1):
+    self.sum += val * n
+    self.count += n
+    self.average = self.sum / self.count
+#-------------------------------------------------------------------------------
+    
+def draw_result_visualization(folder, epoch_result):
+    # the change of loss
+    np.savetxt(os.path.join(folder, "epoch.txt"), epoch_result, fmt="%.4f", delimiter=',', newline='\n')
+    plt.figure()
+    plt.plot(epoch_result[:][0], epoch_result[:][1])
+    plt.title("the change of the loss")
+    plt.xlabel("epoch")
+    plt.ylabel("loss")
+    plt.savefig(os.path.join(folder, "loss_change.png"))
+    plt.figure()
+    plt.plot(epoch_result[:][0], epoch_result[:][2])
+    plt.title("the change of the accuracy1")
+    plt.xlabel("epoch")
+    plt.ylabel("accuracy1")
+    plt.savefig(os.path.join(folder, "accuracy1_change.png"))
+    plt.figure()
+    plt.plot(epoch_result[:][0], epoch_result[:][3])
+    plt.title("the change of the accuracy3")
+    plt.xlabel("epoch")
+    plt.ylabel("accuracy3")
+    plt.savefig(os.path.join(folder, "accuracy3_change.png"))
+
+def store_result(folder, Accuracy, mIoU, W_Recall, W_Precision, W_F1, CM, epoch, batch_size, learning_rate, weight_decay):
+    with open(os.path.join(folder, "accuracy.txt"), 'w', encoding="utf-8") as f:
+        f.write("Parameter settings:" + "\n")
+        f.write("epoch : " + str(epoch) + "\n")
+        f.write("batch_size : " + str(batch_size) + "\n")
+        f.write("learning_rate : " + str(learning_rate) + "\n")
+        f.write("weight_decay : " + str(weight_decay) + "\n")
+        f.write("Model result:" + "\n")
+        f.write("Accuracy : {:.4f}\n".format(Accuracy))
+        f.write("mIoU : {:.4f}\n".format(mIoU))
+        f.write("W-Recall : {:.3f}\n".format(W_Recall))
+        f.write("W-Precision : {:.3f}\n".format(W_Precision))
+        f.write("W-F1 : {:.3f}\n".format(W_F1))
+        f.write("Confusion Matrix :\n")
+        f.write("{}".format(CM))
+
+def compute_mIoU(CM):
+    np.seterr(divide="ignore", invalid="ignore")
+    intersection = np.diag(CM)
+    ground_truth_set = CM.sum(axis=1)
+    predicted_set = CM.sum(axis=0)
+    union = ground_truth_set + predicted_set - intersection
+    IoU = intersection / union.astype(np.float32)
+    mIoU = np.mean(IoU)
+    return mIoU
+
+def compute_acc(CM):
+    np.seterr(divide="ignore", invalid="ignore")
+    TP = np.sum(np.diag(CM))
+    Sum = np.sum(CM)
+    acc = TP/Sum
+    return acc
+
+def compute_metrics(CM):
+    np.seterr(divide="ignore", invalid="ignore")
+    num_classes = CM.shape[0]
+    GT_array = np.sum(CM, axis=0)
+    TP_array = np.diag(CM)
+    Recall_array = np.array([])
+    Precision_array = np.array([])
+    F1_array = np.array([])
+
+    for i in range(num_classes):
+        TP = TP_array[i]
+        FP = np.sum(CM[i,:])-TP
+        FN = np.sum(CM[:,i])-TP
+        TN = np.sum(CM)-TP-FP-FN
+        print(i, TP, FP, FN, TN)
+        Recall = TP/(TP+FN)
+        Precision = TP/(TP+FP)
+        F1 = 2*Recall*Precision/(Recall+Precision)
+        Recall_array = np.append(Recall_array, Recall)
+        Precision_array = np.append(Precision_array, Precision)
+        F1_array = np.append(F1_array, F1)
+    # print(Recall_array, Precision_array, F1_array)
+    weighted_Recall = np.sum(GT_array*Recall_array)/np.sum(CM)
+    weighted_Precision = np.sum(GT_array*Precision_array)/np.sum(CM)
+    weighted_F1 = np.sum(GT_array*F1_array)/np.sum(CM)
+    
+    return weighted_Recall, weighted_Precision, weighted_F1
