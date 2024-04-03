@@ -1,6 +1,7 @@
 import torch
 import timm
 import numpy as np
+import math
 
 from einops import repeat, rearrange
 from einops.layers.torch import Rearrange
@@ -46,6 +47,7 @@ class MAE_Encoder(torch.nn.Module):
                  ) -> None:
         super().__init__()
 
+        self.emb_dim = emb_dim
         self.cls_token = torch.nn.Parameter(torch.zeros(1, 1, emb_dim))
         self.pos_embedding = torch.nn.Parameter(torch.zeros((image_size // patch_size) ** 2, 1, emb_dim))
         self.shuffle = PatchShuffle(mask_ratio)
@@ -156,6 +158,7 @@ class ViT_Classifier(torch.nn.Module):
         patches = self.patchify(img)
         patches = rearrange(patches, 'b c h w -> (h w) b c')
         patches = patches + self.pos_embedding
+
         patches = torch.cat([self.cls_token.expand(-1, patches.shape[1], -1), patches], dim=0)
         patches = rearrange(patches, 't b c -> b t c')
         features = self.layer_norm(self.transformer(patches))
@@ -163,22 +166,165 @@ class ViT_Classifier(torch.nn.Module):
         logits = self.head(features[0])
         return logits
 
+class ViT_Segmentor(torch.nn.Module):
+    def __init__(self, encoder : MAE_Encoder, out_channels=10, downsample_factor=16, features=[512, 256, 128, 64, 32]) -> None: 
+        super().__init__()
+        self.cls_token = encoder.cls_token
+        self.pos_embedding = encoder.pos_embedding
+        self.patchify = encoder.patchify
+        self.transformer = encoder.transformer
+        self.layer_norm = encoder.layer_norm
+        self.downsample_factor = downsample_factor
+        in_channels = encoder.emb_dim
 
+        self.decoder_1 = torch.nn.Sequential(
+                    torch.nn.Conv2d(in_channels, features[0], 3, padding=1),
+                    torch.nn.BatchNorm2d(features[0]),
+                    torch.nn.ReLU(inplace=True),
+                    torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+                )
+        self.decoder_2 = torch.nn.Sequential(
+                    torch.nn.Conv2d(features[0], features[1], 3, padding=1),
+                    torch.nn.BatchNorm2d(features[1]),
+                    torch.nn.ReLU(inplace=True),
+                    torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+                )
+        self.decoder_3 = torch.nn.Sequential(
+                    torch.nn.Conv2d(features[1], features[2], 3, padding=1),
+                    torch.nn.BatchNorm2d(features[2]),
+                    torch.nn.ReLU(inplace=True),
+                    torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+                )
+        self.decoder_4 = torch.nn.Sequential(
+                    torch.nn.Conv2d(features[2], features[3], 3, padding=1),
+                    torch.nn.BatchNorm2d(features[3]),
+                    torch.nn.ReLU(inplace=True),
+                    torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+                )
+
+        self.decoder_5 = torch.nn.Sequential(
+                    torch.nn.Conv2d(features[3], features[4], 3, padding=1),
+                    torch.nn.BatchNorm2d(features[4]),
+                    torch.nn.ReLU(inplace=True),
+                    torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+                )
+        
+        self.scene_1 = torch.nn.Sequential(
+                    torch.nn.Conv2d(in_channels, 1, 1, padding=0),
+                    torch.nn.ReLU(inplace=True),
+                    torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+                )
+        
+        self.scene_2 = torch.nn.Sequential(
+                    torch.nn.Conv2d(features[0], 1, 1, padding=0),
+                    torch.nn.ReLU(inplace=True),
+                    torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+                )
+        
+        self.scene_3 = torch.nn.Sequential(
+                    torch.nn.Conv2d(features[1], 1, 1, padding=0),
+                    torch.nn.ReLU(inplace=True),
+                    torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+                )
+        
+        self.scene_4 = torch.nn.Sequential(
+                    torch.nn.Conv2d(features[2], 1, 1, padding=0),
+                    torch.nn.ReLU(inplace=True),
+                    torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+                )
+        
+        self.scene_5 = torch.nn.Sequential(
+                    torch.nn.Conv2d(features[3], 1, 1, padding=0),
+                    torch.nn.ReLU(inplace=True),
+                    torch.nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+                )
+
+        self.origin_scene_embedding = torch.nn.Sequential(
+                    torch.nn.Conv2d(in_channels, out_channels, 1, padding=0),
+                    torch.nn.ReLU(inplace=True),
+                    torch.nn.Upsample(scale_factor=self.downsample_factor*2, mode="bilinear", align_corners=True)
+                )
+    
+
+        if self.downsample_factor == 8:
+            self.final_out = torch.nn.Conv2d(features[-2], out_channels, 3, padding=1)
+        elif self.downsample_factor == 16:
+            self.final_out = torch.nn.Conv2d(features[-1], out_channels, 3, padding=1)
+        else:
+            raise ValueError("downsample factor which depends on your image size and patch size can only be 8 or 16.")
+
+    def forward(self, img):
+        patches = self.patchify(img)
+        patches = rearrange(patches, 'b c h w -> (h w) b c')
+        patches = patches + self.pos_embedding
+
+        patches = rearrange(patches, 't b c -> b t c')
+        features = self.layer_norm(self.transformer(patches))
+        features = rearrange(features, 'b t c -> b c t')
+        features = rearrange(features, 'b c (h w) -> b c h w', h=int(math.sqrt(features.shape[-1])), w=int(math.sqrt(features.shape[-1])))
+
+        # Scene Based Decoder
+        global_scene_embedding = self.origin_scene_embedding(features)
+
+        feature_scene1 = self.scene_1(features)
+        x = self.decoder_1(features)
+
+        feature_scene2 = self.scene_2(x+feature_scene1)
+        x = self.decoder_2(x+feature_scene1)
+
+        feature_scene3 = self.scene_3(x+feature_scene2)
+        x = self.decoder_3(x+feature_scene2)
+
+        feature_scene4 = self.scene_4(x+feature_scene3)
+        x = self.decoder_4(x+feature_scene3)
+
+        if self.downsample_factor == 16:
+            feature_scene5 = self.scene_5(x+feature_scene4)
+            print(feature_scene5.shape)
+            x = self.decoder_5(x+feature_scene4)
+            x = self.final_out(x+feature_scene5)
+        else:
+            x = self.final_out(x+feature_scene4)
+
+        return x, global_scene_embedding
+    
 if __name__ == '__main__':
-    shuffle = PatchShuffle(0.75)
-    a = torch.rand(16, 2, 10)
-    b, forward_indexes, backward_indexes = shuffle(a)
-    print(b.shape)
+    model_type = "Segmentation"
+    if model_type == "Pretrained":
+        print("Pretrained")
+        shuffle = PatchShuffle(0.75)
+        a = torch.rand(16, 2, 10)
+        b, forward_indexes, backward_indexes = shuffle(a)
+        print(b.shape)
 
-    img = torch.rand(2, 3, 32, 32)
-    encoder = MAE_Encoder()
-    decoder = MAE_Decoder()
-    features, backward_indexes = encoder(img)
-    print(forward_indexes.shape)
-    predicted_img, mask = decoder(features, backward_indexes)
-    print(predicted_img.shape)
-    loss = torch.mean((predicted_img - img) ** 2 * mask / 0.75)
-    print(loss)
+        img = torch.rand(2, 3, 32, 32)
+        encoder = MAE_Encoder()
+        decoder = MAE_Decoder()
+        features, backward_indexes = encoder(img)
+        print(forward_indexes.shape)
+        predicted_img, mask = decoder(features, backward_indexes)
+        print(predicted_img.shape)
+        loss = torch.mean((predicted_img - img) ** 2 * mask / 0.75)
+        print(loss)
+    
+    elif model_type == "Classify":
+        print("Classify")
+        img = torch.rand(2, 3, 512, 512)
+        encoder = MAE_Encoder()
+        model = ViT_Classifier(encoder, num_classes=10)
+        output = model(img)
+        print(output.shape)
+    
+    elif model_type == "Segmentation":
+        print("Segmentation")
+        img = torch.rand(2, 3, 512, 512)
+        encoder = MAE_Encoder(patch_size=32)
+        model = ViT_Segmentor(encoder, out_channels=10, downsample_factor=16)
+        output = model(img)
+        print(output.shape)
+
+    else:
+        raise ValueError("model_type can only be Pretrained, Classify or Segmentation.")
 
 # def mae_vit_base_patch16_dec512d8b(**kwargs):
 #     model = MaskedAutoencoderViT(
