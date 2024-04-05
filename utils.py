@@ -44,23 +44,6 @@ def write_tif(newpath, im_data, im_geotrans, im_proj, datatype):
             new_dataset.GetRasterBand(i+1).WriteArray(im_data[i])
     del new_dataset
 
-def compute_mIoU(CM):
-    np.seterr(divide="ignore", invalid="ignore")
-    intersection = np.diag(CM)
-    ground_truth_set = CM.sum(axis=1)
-    predicted_set = CM.sum(axis=0)
-    union = ground_truth_set + predicted_set - intersection
-    IoU = intersection / union.astype(np.float32)
-    mIoU = np.mean(IoU)
-    return mIoU
-
-def compute_acc(CM):
-    np.seterr(divide="ignore", invalid="ignore")
-    TP = np.sum(np.diag(CM))
-    Sum = np.sum(CM)
-    acc = TP/Sum
-    return acc
-
 def init_ddp(local_rank):
     '''
     有了这一句之后,在转换device的时候直接使用 a=a.cuda()即可,否则要用a=a.cuda(local_rank)
@@ -186,24 +169,25 @@ class AverageMeter(object):
 def draw_result_visualization(folder, epoch_result):
     # the change of loss
     np.savetxt(os.path.join(folder, "epoch.txt"), epoch_result, fmt="%.4f", delimiter=',', newline='\n')
-    plt.figure()
-    plt.plot(epoch_result[:][0], epoch_result[:][1])
-    plt.title("the change of the loss")
-    plt.xlabel("epoch")
-    plt.ylabel("loss")
-    plt.savefig(os.path.join(folder, "loss_change.png"))
-    plt.figure()
-    plt.plot(epoch_result[:][0], epoch_result[:][2])
-    plt.title("the change of the accuracy1")
-    plt.xlabel("epoch")
-    plt.ylabel("accuracy1")
-    plt.savefig(os.path.join(folder, "accuracy1_change.png"))
-    plt.figure()
-    plt.plot(epoch_result[:][0], epoch_result[:][3])
-    plt.title("the change of the accuracy3")
-    plt.xlabel("epoch")
-    plt.ylabel("accuracy3")
-    plt.savefig(os.path.join(folder, "accuracy3_change.png"))
+    with plt.ioff():
+      plt.figure()
+      plt.plot(epoch_result[:][0], epoch_result[:][1])
+      plt.title("the change of the loss")
+      plt.xlabel("epoch")
+      plt.ylabel("loss")
+      plt.savefig(os.path.join(folder, "loss_change.png"))
+      plt.figure()
+      plt.plot(epoch_result[:][0], epoch_result[:][2])
+      plt.title("the change of the accuracy")
+      plt.xlabel("epoch")
+      plt.ylabel("accuracy")
+      plt.savefig(os.path.join(folder, "accuracy_change.png"))
+      plt.figure()
+      plt.plot(epoch_result[:][0], epoch_result[:][3])
+      plt.title("the change of the MIoU")
+      plt.xlabel("epoch")
+      plt.ylabel("MIoU")
+      plt.savefig(os.path.join(folder, "MIoU_change.png"))
 
 def store_result(folder, Accuracy, mIoU, W_Recall, W_Precision, W_F1, CM, epoch, batch_size, learning_rate, weight_decay):
     with open(os.path.join(folder, "accuracy.txt"), 'w', encoding="utf-8") as f:
@@ -221,8 +205,11 @@ def store_result(folder, Accuracy, mIoU, W_Recall, W_Precision, W_F1, CM, epoch,
         f.write("Confusion Matrix :\n")
         f.write("{}".format(CM))
 
-def compute_mIoU(CM):
+def compute_mIoU(CM, ignore_index=None):
     np.seterr(divide="ignore", invalid="ignore")
+    if ignore_index is not None:
+      CM = np.delete(CM, ignore_index, axis=0)
+      CM = np.delete(CM, ignore_index, axis=1)
     intersection = np.diag(CM)
     ground_truth_set = CM.sum(axis=1)
     predicted_set = CM.sum(axis=0)
@@ -231,15 +218,21 @@ def compute_mIoU(CM):
     mIoU = np.mean(IoU)
     return mIoU
 
-def compute_acc(CM):
+def compute_acc(CM, ignore_index=None):
     np.seterr(divide="ignore", invalid="ignore")
+    if ignore_index is not None:
+      CM = np.delete(CM, ignore_index, axis=0)
+      CM = np.delete(CM, ignore_index, axis=1)
     TP = np.sum(np.diag(CM))
     Sum = np.sum(CM)
     acc = TP/Sum
     return acc
 
-def compute_metrics(CM):
+def compute_metrics(CM, ignore_index=None):
     np.seterr(divide="ignore", invalid="ignore")
+    if ignore_index is not None:
+      CM = np.delete(CM, ignore_index, axis=0)
+      CM = np.delete(CM, ignore_index, axis=1)
     num_classes = CM.shape[0]
     GT_array = np.sum(CM, axis=0)
     TP_array = np.diag(CM)
@@ -252,7 +245,7 @@ def compute_metrics(CM):
         FP = np.sum(CM[i,:])-TP
         FN = np.sum(CM[:,i])-TP
         TN = np.sum(CM)-TP-FP-FN
-        print(i, TP, FP, FN, TN)
+        # print(i, TP, FP, FN, TN)
         Recall = TP/(TP+FN)
         Precision = TP/(TP+FP)
         F1 = 2*Recall*Precision/(Recall+Precision)
