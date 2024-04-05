@@ -5,17 +5,17 @@ import numpy as np
 from tqdm import tqdm
 from utils import *
 
-train_percent = 0.8
+train_percent = 0.6
 val_percent = 0.1
-test_percent = 0.1
+test_percent = 0.3
 
-data_path = 'data'
+data_path = 'data/segmentation'
 
 if __name__ == "__main__":
     random.seed(0)
     print("Generate txt for trainning, validating and testing in data folder.")
     # segfilepath = os.path.join(data_path, "labels")
-    segfilepath = r"/mnt/ImarsData/ljs/PRD289K_Annotation\label"
+    segfilepath = r"/mnt/ImarsData/ljs/PRD289K_Annotation/label"
     saveBasePath = os.path.join(data_path, "list")
     
     temp_seg = os.listdir(segfilepath)
@@ -34,7 +34,7 @@ if __name__ == "__main__":
     # shuffle the list
     random.shuffle(total_seg)
 
-    train_list = total_seg[0:int(num*1)]
+    train_list = total_seg[0:int(num*train_percent)]
     val_list = total_seg[int(num*train_percent):int(num*(train_percent+val_percent))]
     test_list = total_seg[int(num*(train_percent+val_percent)):int(num*(train_percent+val_percent+test_percent))]
 
@@ -74,7 +74,7 @@ if __name__ == "__main__":
             label = np.squeeze(label, 2)
         elif label_name.endswith(".png"):
             label = cv2.imread(label_name, cv2.IMREAD_GRAYSCALE)
-
+        
         if len(np.shape(label)) > 2:
             print("The shape of %s is %s, please checkout the dataset format."%(name, str(np.shape(label))))
         classes_nums += np.bincount(np.reshape(label, [-1]), minlength=256)
