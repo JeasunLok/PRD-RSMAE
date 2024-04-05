@@ -176,7 +176,9 @@ class ViT_Segmentor(torch.nn.Module):
         self.layer_norm = encoder.layer_norm
         self.downsample_factor = downsample_factor
         in_channels = encoder.emb_dim
-
+        self.alpha = torch.nn.Parameter(torch.tensor(0.0))
+        self.beta = torch.nn.Parameter(torch.tensor(0.0))
+            
         self.decoder_1 = torch.nn.Sequential(
                     torch.nn.Conv2d(in_channels, features[0], 3, padding=1),
                     torch.nn.BatchNorm2d(features[0]),
@@ -280,13 +282,14 @@ class ViT_Segmentor(torch.nn.Module):
 
         if self.downsample_factor == 16:
             feature_scene5 = self.scene_5(x+feature_scene4)
-            print(feature_scene5.shape)
             x = self.decoder_5(x+feature_scene4)
             x = self.final_out(x+feature_scene5)
         else:
             x = self.final_out(x+feature_scene4)
 
-        return x, global_scene_embedding
+        final_out = self.alpha * x + self.beta * global_scene_embedding
+
+        return final_out, x, global_scene_embedding
     
 if __name__ == '__main__':
     model_type = "Segmentation"
