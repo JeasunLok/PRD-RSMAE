@@ -21,7 +21,7 @@ def read_tif(path):
     im_data = dataset.ReadAsArray(0, 0, cols, rows) # 转为numpy格式
     if len(im_data.shape)<3:
         im_data = np.expand_dims(im_data, 0)
-    im_data = np.transpose(im_data, [2, 1, 0])
+    im_data = np.transpose(im_data, [1, 2, 0])
     del dataset
     return im_data, im_Geotrans, im_proj, cols, rows
 
