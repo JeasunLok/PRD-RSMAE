@@ -5,17 +5,17 @@ import numpy as np
 from tqdm import tqdm
 from utils import *
 
-train_percent = 0.6
+train_percent = 0.7
 val_percent = 0.1
-test_percent = 0.3
+test_percent = 0.2
 
-data_path = 'data/segmentation'
+data_path = '/home/ljs/PRD-RSMAE/PRD-RSMAE/data/segmentation'
 
 if __name__ == "__main__":
     random.seed(0)
     print("Generate txt for trainning, validating and testing in data folder.")
     # segfilepath = os.path.join(data_path, "labels")
-    segfilepath = r"/mnt/ImarsData/ljs/PRD289K_Annotation/label"
+    segfilepath = r"/mnt/ImarsData/ljs/PRD289K_Annotation1/label"
     saveBasePath = os.path.join(data_path, "list")
     
     temp_seg = os.listdir(segfilepath)
@@ -71,7 +71,6 @@ if __name__ == "__main__":
         
         if label_name.endswith(".tif"):
             label, im_Geotrans, im_proj, cols, rows = read_tif(label_name)
-            label = np.squeeze(label, 2)
         elif label_name.endswith(".png"):
             label = cv2.imread(label_name, cv2.IMREAD_GRAYSCALE)
         
