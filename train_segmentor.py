@@ -15,7 +15,9 @@ from model import *
 from torch.utils.data import DataLoader
 import torch.distributed as dist
 from torch.cuda.amp import GradScaler
-
+import warnings
+warnings.filterwarnings("ignore")
+os.environ['CUDA_VISIBLE_DEVICES'] = '1,2,3'
 #-------------------------------------------------------------------------------
 # train model
 def train_epoch(model, train_loader, criterion, optimizer, e, epoch, device, num_classes, scaler, fp16, ignore_index=None):
@@ -36,14 +38,14 @@ def train_epoch(model, train_loader, criterion, optimizer, e, epoch, device, num
 
         if fp16:
             with torch.cuda.amp.autocast():
-                batch_prediction, out, embedding = model(batch_data)
+                batch_prediction = model(batch_data)
                 loss = criterion(batch_prediction, batch_label)
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
         else:
-            batch_prediction, out, embedding = model(batch_data)
+            batch_prediction = model(batch_data)
             loss = criterion(batch_prediction, batch_label)
             loss.backward()
             optimizer.step()     
@@ -86,7 +88,7 @@ def valid_epoch(model, val_loader, criterion, e, epoch, device, num_classes, ign
             batch_data = batch_data.to(device).float()
             batch_label = batch_label.to(device).long()
 
-            batch_prediction, out, embedding = model(batch_data)
+            batch_prediction = model(batch_data)
             loss = criterion(batch_prediction, batch_label)
 
             batch_prediction = F.softmax(batch_prediction, dim=1)
@@ -126,7 +128,7 @@ def test_epoch(model, test_loader, device, num_classes, ignore_index=None):
             batch_data = batch_data.to(device).float()
             batch_label = batch_label.to(device).long()
 
-            batch_prediction, out, embedding = model(batch_data)
+            batch_prediction = model(batch_data)
 
             batch_prediction = F.softmax(batch_prediction, dim=1)
             batch_prediction = torch.argmax(batch_prediction, dim=1)
@@ -154,12 +156,12 @@ if __name__ == "__main__":
     distributed = True
     sync_bn = True
     fp16 = True
-    test = True
+    test = False
 
     num_classes = 9
 
-    model_pretrained = True
-    model_path = r"checkpoints/segmentation/2024-04-05-15-35-12/model_state_dict_loss0.1632_epoch70.pth"
+    model_pretrained = False
+    model_path = r""
     encoder_pretrained = True
     encoder_path = r"checkpoints/PRD289K/vit-b-mae-200.pt"
     freeze_encoder = False
@@ -167,8 +169,8 @@ if __name__ == "__main__":
 
     input_shape = [512, 512]
     epoch = 100
-    save_period = 10
-    batch_size = 96
+    save_period = 20
+    batch_size = 24
     ignore_index = 0 # None
 
     # 学习率
@@ -178,6 +180,7 @@ if __name__ == "__main__":
     # 优化器
     momentum = 0.9 
     weight_decay = 0
+    use_focal_loss = False
     
     data_dir = r"data/segmentation"
     logs_dir = r"logs/segmentation"
@@ -190,8 +193,7 @@ if __name__ == "__main__":
         os.makedirs(logs_folder)
         os.makedirs(checkpoints_folder)
 
-    dice_loss = False
-    focal_loss = False
+    
     if local_rank == 0:
         print("===============================================================================")
     # 设置用到的显卡
@@ -227,7 +229,7 @@ if __name__ == "__main__":
         else:
             model_train = torch.nn.DataParallel(model_train)
             cudnn.benchmark = True
-            model_train = model_train.cuda()
+            model_train = model_train.to(device)
 
     # 混精度
     if fp16:
@@ -257,8 +259,8 @@ if __name__ == "__main__":
     num_val = len(val_lines)
     num_test = len(test_lines)
 
-    torch.manual_seed(3407)
-    np.random.seed(3407)
+    torch.manual_seed(1)
+    np.random.seed(1)
 
     if local_rank == 0:
         print("device:", device, "num_train:", num_train, "num_val:", num_val, "num_test:", num_test)
@@ -269,28 +271,26 @@ if __name__ == "__main__":
         for param in [model_train.cls_token, model_train.pos_embedding, model_train.patchify, model_train.transformer, model_train.layer_norm]:
             param.requires_grad = False
         parameters_to_optimize = [
-            {'params': [model_train.alpha, model_train.beta]},  # 将 alpha 和 beta 参数添加到优化器中
             {'params': model_train.decoder_1.parameters()},  # 将 decoder_1 的参数添加到优化器中
             {'params': model_train.decoder_2.parameters()},  # 将 decoder_2 的参数添加到优化器中
             {'params': model_train.decoder_3.parameters()},  # 将 decoder_3 的参数添加到优化器中
             {'params': model_train.decoder_4.parameters()},  # 将 decoder_4 的参数添加到优化器中
             {'params': model_train.decoder_5.parameters()},  # 将 decoder_5 的参数添加到优化器中
-            {'params': model_train.scene_1.parameters()},  # 将 scene_1 的参数添加到优化器中
-            {'params': model_train.scene_2.parameters()},  # 将 scene_2 的参数添加到优化器中
-            {'params': model_train.scene_3.parameters()},  # 将 scene_3 的参数添加到优化器中
-            {'params': model_train.scene_4.parameters()},  # 将 scene_4 的参数添加到优化器中
-            {'params': model_train.scene_5.parameters()},  # 将 scene_5 的参数添加到优化器中
-            {'params': model_train.origin_scene_embedding.parameters()},  # 将 origin_scene_embedding 的参数添加到优化器中
+            {'params': model_train.final_out.parameters()},  # 将 final_out 的参数添加到优化器中
         ]
         optimizer = torch.optim.Adam(parameters_to_optimize, lr=lr, betas=(momentum, 0.999), weight_decay=weight_decay)
     else:
         optimizer = torch.optim.Adam(model_train.parameters(), lr=lr, betas=(momentum, 0.999), weight_decay=weight_decay)
 
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=epoch//10, gamma=0.9)
-    if ignore_index is not None: 
-        criterion = nn.CrossEntropyLoss(ignore_index=ignore_index).cuda()
-    else: 
-        criterion = nn.CrossEntropyLoss().cuda()
+
+    if use_focal_loss:
+        criterion = FocalLoss(ignore_index=ignore_index)
+    else:
+        if ignore_index is not None: 
+            criterion = nn.CrossEntropyLoss(ignore_index=ignore_index).to(device)
+        else: 
+            criterion = nn.CrossEntropyLoss().to(device)
 
     image_transform = get_transform(input_shape, IsResize=True, IsTotensor=True, IsNormalize=True)
     label_transform = get_transform(input_shape, IsResize=True, IsTotensor=True, IsNormalize=False)
@@ -365,4 +365,4 @@ if __name__ == "__main__":
         print("save test result successfully")
         print("===============================================================================") 
 
-# torchrun --nproc_per_node=3 train_segmentor.py
+# torchrun --nproc_per_node=4 train_segmentor.py

@@ -6,10 +6,55 @@ import torchvision.transforms as transforms
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.cuda.amp import GradScaler
+import matplotlib
+matplotlib.use('Agg')  # 设置为不依赖图形界面的后端  
 import matplotlib.pyplot as plt
+import cv2
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.nn.functional as F
+import torch.nn as nn
 from osgeo import gdal
+
+class FocalLoss(nn.Module):  
+    def __init__(self, alpha=0.5, gamma=2, reduction='mean', ignore_index=0):  
+        super(FocalLoss, self).__init__()  
+        self.alpha = alpha  
+        self.gamma = gamma  
+        self.ignore_index = ignore_index  
+        self.reduction = reduction  
+  
+    def forward(self, inputs, targets):  
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none', ignore_index=self.ignore_index)  
+        pt = torch.exp(-ce_loss)  
+        focal_term = (1 - pt) ** self.gamma  
+        focal_loss = self.alpha * focal_term * ce_loss  
+  
+        if self.reduction == 'mean':  
+            loss = focal_loss.mean()  
+        elif self.reduction == 'sum':  
+            loss = focal_loss.sum()  
+        else:   
+            loss = focal_loss  
+  
+        return loss  
+
+import numpy as np
+
+def rgb_to_hsv(rgb_image):
+    rgb_image = np.transpose(rgb_image, [1, 2, 0]) 
+    hsv_image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2HSV)  
+    return hsv_image
+
+def detect_edges_with_laplacian_and_otsu(standardized_image):   
+    standardized_image = np.transpose(standardized_image, [1, 2, 0])
+    gray_image = cv2.cvtColor(standardized_image, cv2.COLOR_RGB2GRAY)  
+    laplacian = cv2.Laplacian(gray_image, cv2.CV_64F)  
+    laplacian_abs = np.abs(laplacian)  
+    laplacian_abs_uint8 = np.uint8(255 * laplacian_abs / np.max(laplacian_abs))  
+    _, otsu = cv2.threshold(laplacian_abs_uint8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    binary_edges = otsu > 0
+    return binary_edges 
 
 # 读取tif
 def read_tif(path):
@@ -38,7 +83,7 @@ def write_tif(newpath, im_data, im_geotrans, im_proj, datatype):
     new_dataset.SetProjection(im_proj)
 
     if im_bands == 1:
-        new_dataset.GetRasterBand(1).WriteArray(im_data.reshape(im_height, im_width))
+        new_dataset.GetRasterBand(1).WriteArray(np.squeeze(im_data, axis=0))
     else:
         for i in range(im_bands):
             new_dataset.GetRasterBand(i+1).WriteArray(im_data[i])
