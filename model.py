@@ -197,13 +197,16 @@ class SDMAE_Encoder(torch.nn.Module):
 
     def forward(self, img, v_image):
         (B, C, H, W) = v_image.shape
-        k = int((0.5+self.sdmask_ratio/2) * H * W)
-        t = int((0.5-self.sdmask_ratio/2) * H * W)
+        k = int((self.sdmask_ratio+0.25*(1-self.sdmask_ratio)) * H * W)
+        t = int((0.25*(1-self.sdmask_ratio)) * H * W)
         percentile_big_values, _ = torch.kthvalue(v_image.view(B, -1), k, dim=1)
         percentile_small_values, _ = torch.kthvalue(v_image.view(B, -1), t, dim=1)
         v_mask_big = (v_image <= percentile_big_values.view(B, 1, 1, 1)).int().view(B, C, H, W) 
         v_mask_small = (v_image >= percentile_small_values.view(B, 1, 1, 1)).int().view(B, C, H, W) 
-        v_mask = v_mask_big + v_mask_small
+        v_mask = v_mask_big & v_mask_small
+
+        mask_random = torch.randint_like(v_mask_big, 0 ,100) < int((self.sdmask_ratio+0.5*(1-self.sdmask_ratio))*100)
+        v_mask = v_mask & mask_random
         v_img = (1-v_mask) * img
  
         patches = self.patchify(img)
@@ -537,7 +540,7 @@ if __name__ == '__main__':
 
     if model_type == "SDPretrained":
         print("SDPretrained")
-        path = r""
+        path = r"F49E006016_Level_17_1560.TIF"
         model = SDMAE_ViT(image_size=512, patch_size=32)
         val_mask = torch.rand(1, 1, 512, 512)
         val_img ,im_Geotrans, im_proj, cols, rows = read_tif(path)
