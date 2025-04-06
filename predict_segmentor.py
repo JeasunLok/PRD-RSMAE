@@ -45,8 +45,8 @@ if __name__ == "__main__":
     if local_rank == 0:
         print("===============================================================================")
 
-    model = MAE_ViT(image_size=input_shape[0], patch_size=32)      
-    model = SBFNet(model.encoder, out_channels=num_classes, downsample_factor=16)
+    model = SDMAE_ViT(image_size=input_shape[0], patch_size=32)      
+    model = SDSBFNet(model.encoder, out_channels=num_classes, downsample_factor=16)
 
     if Cuda:
         if distributed:

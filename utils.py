@@ -43,15 +43,19 @@ import numpy as np
 
 def rgb_to_hsv(rgb_image):
     rgb_image = np.transpose(rgb_image, [1, 2, 0]) 
-    hsv_image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2HSV)  
+    hsv_image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2HSV)
     return hsv_image
 
 def detect_edges_with_laplacian_and_otsu(standardized_image):   
     standardized_image = np.transpose(standardized_image, [1, 2, 0])
     gray_image = cv2.cvtColor(standardized_image, cv2.COLOR_RGB2GRAY)  
-    laplacian = cv2.Laplacian(gray_image, cv2.CV_64F)  
-    laplacian_abs = np.abs(laplacian)  
-    laplacian_abs_uint8 = np.uint8(255 * laplacian_abs / np.max(laplacian_abs))  
+    laplacian = cv2.Laplacian(gray_image, cv2.CV_32F)  
+    laplacian_abs = np.abs(laplacian)
+    max_val = np.max(laplacian_abs)  
+    if max_val == 0:  
+        max_val = 1e-6
+    laplacian_abs_scaled = laplacian_abs / max_val  
+    laplacian_abs_uint8 = np.uint8(255 * laplacian_abs)  
     _, otsu = cv2.threshold(laplacian_abs_uint8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     binary_edges = otsu > 0
     return binary_edges 
@@ -234,7 +238,7 @@ def draw_result_visualization(folder, epoch_result):
       plt.ylabel("MIoU")
       plt.savefig(os.path.join(folder, "MIoU_change.png"))
 
-def store_result(folder, Accuracy, mIoU, W_Recall, W_Precision, W_F1, CM, epoch, batch_size, learning_rate, weight_decay):
+def store_result(folder, Accuracy, mIoU, W_Recall, W_Precision, W_F1, CM, IoU_array, Precision_array, Recall_array, F1_array, epoch, batch_size, learning_rate, weight_decay):
     with open(os.path.join(folder, "accuracy.txt"), 'w', encoding="utf-8") as f:
         f.write("Parameter settings:" + "\n")
         f.write("epoch : " + str(epoch) + "\n")
@@ -248,7 +252,15 @@ def store_result(folder, Accuracy, mIoU, W_Recall, W_Precision, W_F1, CM, epoch,
         f.write("W-Precision : {:.3f}\n".format(W_Precision))
         f.write("W-F1 : {:.3f}\n".format(W_F1))
         f.write("Confusion Matrix :\n")
-        f.write("{}".format(CM))
+        f.write("{}\n".format(CM))
+        f.write("IoU :\n")
+        f.write("{}\n".format(IoU_array))
+        f.write("Precision :\n")
+        f.write("{}\n".format(Precision_array))
+        f.write("Recall :\n")
+        f.write("{}\n".format(Recall_array))
+        f.write("F1 :\n")
+        f.write("{}\n".format(F1_array))
 
 def compute_mIoU(CM, ignore_index=None):
     np.seterr(divide="ignore", invalid="ignore")
@@ -275,31 +287,41 @@ def compute_acc(CM, ignore_index=None):
 
 def compute_metrics(CM, ignore_index=None):
     np.seterr(divide="ignore", invalid="ignore")
+    
     if ignore_index is not None:
-      CM = np.delete(CM, ignore_index, axis=0)
-      CM = np.delete(CM, ignore_index, axis=1)
+        CM = np.delete(CM, ignore_index, axis=0)
+        CM = np.delete(CM, ignore_index, axis=1)
+        
     num_classes = CM.shape[0]
     GT_array = np.sum(CM, axis=0)
     TP_array = np.diag(CM)
+    
     Recall_array = np.array([])
     Precision_array = np.array([])
     F1_array = np.array([])
+    IoU_array = np.array([])
 
     for i in range(num_classes):
         TP = TP_array[i]
-        FP = np.sum(CM[i,:])-TP
-        FN = np.sum(CM[:,i])-TP
-        TN = np.sum(CM)-TP-FP-FN
-        # print(i, TP, FP, FN, TN)
-        Recall = TP/(TP+FN)
-        Precision = TP/(TP+FP)
-        F1 = 2*Recall*Precision/(Recall+Precision)
+        FP = np.sum(CM[i, :]) - TP
+        FN = np.sum(CM[:, i]) - TP
+        TN = np.sum(CM) - TP - FP - FN
+        
+        Recall = TP / (TP + FN)
+        Precision = TP / (TP + FP)
+        F1 = 2 * Recall * Precision / (Recall + Precision)
+        
+        # IoU calculation
+        IoU = TP / (TP + FP + FN) if (TP + FP + FN) != 0 else 0
+        
         Recall_array = np.append(Recall_array, Recall)
         Precision_array = np.append(Precision_array, Precision)
         F1_array = np.append(F1_array, F1)
-    # print(Recall_array, Precision_array, F1_array)
-    weighted_Recall = np.sum(GT_array*Recall_array)/np.sum(CM)
-    weighted_Precision = np.sum(GT_array*Precision_array)/np.sum(CM)
-    weighted_F1 = np.sum(GT_array*F1_array)/np.sum(CM)
+        IoU_array = np.append(IoU_array, IoU)
     
-    return weighted_Recall, weighted_Precision, weighted_F1
+    # Weighted averages
+    weighted_Recall = np.sum(GT_array * Recall_array) / np.sum(CM)
+    weighted_Precision = np.sum(GT_array * Precision_array) / np.sum(CM)
+    weighted_F1 = np.sum(GT_array * F1_array) / np.sum(CM)
+    
+    return weighted_Recall, weighted_Precision, weighted_F1, IoU_array, Precision_array, Recall_array, F1_array

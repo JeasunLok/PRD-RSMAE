@@ -16,24 +16,24 @@ import torch.multiprocessing as mp
 from torch.cuda.amp import GradScaler
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
-os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--pretrained', type=bool, default=True)
+    parser.add_argument('--pretrained', type=bool, default=False)
     parser.add_argument('--input_shape', type=int, default=512)
-    parser.add_argument('--batch_size', type=int, default=64)
-    parser.add_argument('--max_device_batch_size', type=int, default=32)
-    parser.add_argument('--base_learning_rate', type=float, default=1e-4)
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--max_device_batch_size', type=int, default=8)
+    parser.add_argument('--base_learning_rate', type=float, default=5e-4)
     parser.add_argument('--weight_decay', type=float, default=0.05)
     parser.add_argument('--mask_ratio', type=float, default=0.75)
     parser.add_argument('--sdmask_ratio', type=float, default=0.9)
-    parser.add_argument('--total_epoch', type=int, default=39)
+    parser.add_argument('--total_epoch', type=int, default=99)
     parser.add_argument('--warmup_epoch', type=int, default=10)
     parser.add_argument('--data_list_path', type=str, default='data/PRD289K/list')
-    parser.add_argument('--pretrained_model_path', type=str, default='checkpoints/PRD289K/vit-b-sdmae-62-dict.pth')
-    parser.add_argument('--save_model_path', type=str, default='checkpoints/PRD289K/vit-b-sdmae.pt')
+    parser.add_argument('--pretrained_model_path', type=str, default='checkpoints/PRD289K/vit-b-sdmae-noe-1-dict.pth')
+    parser.add_argument('--save_model_path', type=str, default='checkpoints/PRD289K/vit-b-sdmae-noe.pt')
 
     args = parser.parse_args()
     setup_seed(args.seed)
@@ -67,7 +67,8 @@ if __name__ == '__main__':
     if local_rank == 0:
         writer = SummaryWriter(os.path.join(logs_folder, 'SummaryWriter'))
 
-    model = SDMAE_ViT(mask_ratio=args.mask_ratio, sdmask_ratio=args.sdmask_ratio).to(device)
+    # model = SDMAE_ViT(mask_ratio=args.mask_ratio, sdmask_ratio=args.sdmask_ratio).to(device)
+    model = MAE_ViT(mask_ratio=args.mask_ratio).to(device)
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)  # BN层同步
     num_gpus = torch.cuda.device_count()
     if num_gpus > 1:
@@ -99,10 +100,12 @@ if __name__ == '__main__':
             img = img.to(device)
             v_img = v_img.to(device)
             e_img = e_img.to(device)
-            predicted_img, mask = model(img, v_img)
+            # predicted_img, mask = model(img, v_img)
+            predicted_img, mask = model(img)
             loss1 = torch.mean((predicted_img - img) ** 2 * mask) / args.mask_ratio
             loss2 = torch.mean((predicted_img - img) ** 2 * mask * e_img) / (torch.sum(mask * e_img)/torch.flatten(mask * e_img).shape[0])
             loss = loss1 + loss2
+            # loss = loss1
             loss.backward()
             if step_count % steps_per_update == 0:
                 optim.step()
@@ -123,6 +126,7 @@ if __name__ == '__main__':
                 val_img = val_img.to(device)
                 val_v_img = val_v_img.to(device)
                 predicted_val_img, mask = model(val_img, val_v_img)
+                # predicted_val_img, mask = model(val_img)
 
                 predicted_val_img = predicted_val_img * mask + val_img * (1 - mask)
                 img = torch.cat([val_img * (1 - mask), predicted_val_img, val_img], dim=0)
@@ -131,11 +135,11 @@ if __name__ == '__main__':
                     writer.add_image('mae_image', (img + 1) / 2, global_step=e)
             
             ''' save model '''
-            torch.save(model, args.save_model_path.split(".")[0]+"-"+str(e+63)+".pt")
-            torch.save(model.state_dict(), args.save_model_path.split(".")[0]+"-"+str(e+63)+"-dict.pth")
+            torch.save(model, args.save_model_path.split(".")[0]+"-"+str(e+1+1)+".pt")
+            torch.save(model.state_dict(), args.save_model_path.split(".")[0]+"-"+str(e+1+1)+"-dict.pth")
 
     dist.destroy_process_group()  # 消除进程组，和 init_process_group 相对
 
-# torchrun --nproc_per_node=2 sdmae_pretrain_ddp.py
-# tensorboard --logdir=/home/ljs/PRD-RSMAE/PRD-RSMAE/logs/PRD289K/2024-06-05-16-09-46_SDMAE/SummaryWriter --port=6061
-# ssh -NfL 8081:127.0.0.1:6061 ljs@172.18.206.54 -p 10122
+# torchrun --nproc_per_node=4 sdmae_pretrain_ddp.py
+# tensorboard --logdir=/home/ljs/PRD-RSMAE/PRD-RSMAE/logs/PRD289K/2024-06-13-20-49-07_SDMAE_noe/SummaryWriter --port=6063
+# ssh -NfL 8084:127.0.0.1:6063 ljs@172.18.206.54 -p 6522

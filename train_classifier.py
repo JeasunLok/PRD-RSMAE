@@ -42,7 +42,7 @@ if __name__ == '__main__':
         model = torch.load(args.pretrained_model_path, map_location='cpu')
         writer = SummaryWriter(os.path.join('logs', 'cifar10', 'pretrain-cls'))
     else:
-        model = MAE_ViT()
+        model = SDMAE_ViT()
         writer = SummaryWriter(os.path.join('logs', 'cifar10', 'scratch-cls'))
     model = ViT_Classifier(model.encoder, num_classes=10).to(device)
 

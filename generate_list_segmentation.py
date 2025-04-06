@@ -15,7 +15,8 @@ if __name__ == "__main__":
     random.seed(0)
     print("Generate txt for trainning, validating and testing in data folder.")
     # segfilepath = os.path.join(data_path, "labels")
-    segfilepath = r"/mnt/ImarsData/ljs/PRD289K_Annotation1/label"
+    # segfilepath = r"/mnt/ImarsData/ljs/PRD289K_Annotation/label
+    segfilepath = r"/mnt/ImarsData/ljs/datasets/LoveDA/label"
     saveBasePath = os.path.join(data_path, "list")
     
     temp_seg = os.listdir(segfilepath)

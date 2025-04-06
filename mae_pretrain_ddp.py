@@ -16,20 +16,20 @@ import torch.multiprocessing as mp
 from torch.cuda.amp import GradScaler
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
-
+os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--pretrained', type=bool, default=True)
+    parser.add_argument('--pretrained', type=bool, default=False)
     parser.add_argument('--input_shape', type=int, default=512)
-    parser.add_argument('--batch_size', type=int, default=96)
+    parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--max_device_batch_size', type=int, default=32)
     parser.add_argument('--base_learning_rate', type=float, default=5e-4)
     parser.add_argument('--weight_decay', type=float, default=0.05)
-    parser.add_argument('--mask_ratio', type=float, default=0.75)
-    parser.add_argument('--total_epoch', type=int, default=200)
-    parser.add_argument('--warmup_epoch', type=int, default=20)
+    parser.add_argument('--mask_ratio', type=float, default=0.65)
+    parser.add_argument('--total_epoch', type=int, default=100)
+    parser.add_argument('--warmup_epoch', type=int, default=10)
     parser.add_argument('--data_list_path', type=str, default='data/PRD289K/list')
     parser.add_argument('--pretrained_model_path', type=str, default='checkpoints/PRD289K/vit-b-mae-200-dict.pth')
     parser.add_argument('--save_model_path', type=str, default='checkpoints/PRD289K/vit-b-mae.pt')
@@ -62,7 +62,7 @@ if __name__ == '__main__':
     val_dataset = MyDataset(val_lines, input_shape, image_transform=image_transform)
 
     train_sampler = DistributedSampler(train_dataset, shuffle=True)
-    dataloader = torch.utils.data.DataLoader(train_dataset, load_batch_size, shuffle=False, num_workers=4, sampler=train_sampler, pin_memory=True)
+    dataloader = torch.utils.data.DataLoader(train_dataset, load_batch_size, shuffle=False, num_workers=0, sampler=train_sampler, pin_memory=True)
     if local_rank == 0:
         writer = SummaryWriter(os.path.join(logs_folder, 'SummaryWriter'))
 
@@ -124,11 +124,11 @@ if __name__ == '__main__':
                     writer.add_image('mae_image', (img + 1) / 2, global_step=e)
             
             ''' save model '''
-            torch.save(model, args.save_model_path.split(".")[0]+"-"+str(e)+".pt")
-            torch.save(model.state_dict(), args.save_model_path.split(".")[0]+"-"+str(e)+"-dict.pth")
+            torch.save(model, args.save_model_path.split(".")[0]+"-"+str(e+1)+".pt")
+            torch.save(model.state_dict(), args.save_model_path.split(".")[0]+"-"+str(e+1)+"-dict.pth")
 
     dist.destroy_process_group()  # 消除进程组，和 init_process_group 相对
 
-# torchrun --nproc_per_node=3 mae_pretrain_ddp.py
-# tensorboard --logdir=/home/ljs/PRD-RSMAE/PRD-RSMAE/logs/PRD289K/2024-03-04-02-21-30/SummaryWriter --port=6061
-# ssh -NfL 8080:127.0.0.1:6061 ljs@172.18.206.54 -p 10122
+# torchrun --nproc_per_node=2 mae_pretrain_ddp.py
+# tensorboard --logdir=/home/ljs/PRD-RSMAE/PRD-RSMAE/logs/PRD289K/2024-06-11-15-05-24_MAE/SummaryWriter --port=6061
+# ssh -NfL 8082:127.0.0.1:6061 ljs@172.18.206.54 -p 10122
