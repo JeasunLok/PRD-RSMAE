@@ -56,7 +56,7 @@ def detect_edges_with_laplacian_and_otsu(standardized_image):
         max_val = 1e-6
     laplacian_abs_scaled = laplacian_abs / max_val  
     laplacian_abs_uint8 = np.uint8(255 * laplacian_abs)  
-    _, otsu = cv2.threshold(laplacian_abs_uint8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, otsu = cv2.threshold(laplacian_abs_uint8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU) # type: ignore
     binary_edges = otsu > 0
     return binary_edges 
 
